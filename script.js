@@ -2,13 +2,9 @@
 const startScreen = document.getElementById('start-screen');
 const statusEl = document.getElementById('status');
 const messageEl = document.getElementById('message');
-const progressBar = document.getElementById('progress-bar');
+const progressTop = document.getElementById('progress-bar-top');
 const closeButton = document.getElementById('close-button');
-
 const modelInfo = document.getElementById('model-details');
-
-const modelCache = {}; // Кэш моделей
-
 const hintPanel = document.getElementById('hint-panel');
 const hintToggle = document.getElementById('hint-toggle');
 
@@ -16,112 +12,87 @@ hintToggle.addEventListener('click', () => {
     hintPanel.style.display = 'none';
 });
 
-
-// Создание сцены
+// Сцена, камера, рендерер
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
 
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputEncoding = THREE.sRGBEncoding;
 document.body.appendChild(renderer.domElement);
 
-// Освещение
+// Освещение и HDR
 scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 
 const pmremGenerator = new THREE.PMREMGenerator(renderer);
 pmremGenerator.compileEquirectangularShader();
 
 new THREE.RGBELoader()
-  .setPath('hdr/')
-  .load('photo_studio_broadway_hall_1k.hdr', function (texture) {
-    const envMap = pmremGenerator.fromEquirectangular(texture).texture;
+    .setPath('hdr/')
+    .load('photo_studio_broadway_hall_1k.hdr', texture => {
+        const envMap = pmremGenerator.fromEquirectangular(texture).texture;
+        scene.environment = envMap;
+        scene.background = null;
+        texture.dispose();
+        pmremGenerator.dispose();
+    });
 
-    scene.environment = envMap;
-    scene.background = null; // или envMap, если нужен фон
-
-    texture.dispose();
-    pmremGenerator.dispose();
-  });
-
-// Draco-декодер
+// Загрузчик GLTF + Draco
 const dracoLoader = new THREE.DRACOLoader();
 dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.4.3/');
-const loader = new THREE.GLTFLoader();
-loader.setDRACOLoader(dracoLoader);
+const loader = new THREE.GLTFLoader().setDRACOLoader(dracoLoader);
 
-// Управление камерой (взято из первого варианта)
+// OrbitControls
 const controls = new THREE.OrbitControls(camera, renderer.domElement);
-controls.enablePan = false;
-controls.enableZoom = true;
-controls.minDistance = 5;  //5
-controls.maxDistance = 8;   //8
-controls.minPolarAngle = Math.PI / 4;
-controls.maxPolarAngle = Math.PI / 2;
+Object.assign(controls, {
+    enablePan: false,
+    enableZoom: true,
+    minDistance: 5,
+    maxDistance: 8,
+    minPolarAngle: Math.PI / 4,
+    maxPolarAngle: Math.PI / 2,
+    enableDamping: true,
+    dampingFactor: 0.05
+});
 
-// === Автовращение при бездействии ===
+// Автовращение
 let idleTimeout = null;
-let isIdle = false;
-const idleDelay = 10000; // 10 секунд
-let autoRotateSpeed = 0.005;
-
-controls.autoRotate = false;
-controls.autoRotateSpeed = 0.5; // настрой скорость
-
-controls.enableDamping = true;
-controls.dampingFactor = 0.05;
-
-// Функция сброса таймера бездействия и авто-вращения
-function resetIdleTimer() {
-    if (isIdle) {
-        isIdle = false;
-        controls.autoRotate = false;
-    }
+const idleDelay = 10000;
+const resetIdleTimer = () => {
     clearTimeout(idleTimeout);
-    idleTimeout = setTimeout(() => {
-        isIdle = true;
-        controls.autoRotate = true;
-    }, idleDelay);
-}
+    controls.autoRotate = false;
+    idleTimeout = setTimeout(() => controls.autoRotate = true, idleDelay);
+};
+['mousedown', 'keydown', 'wheel', 'touchstart'].forEach(e => window.addEventListener(e, resetIdleTimer));
+resetIdleTimer();
 
-// Сброс таймера при активности
-['mousedown', 'keydown', 'wheel', 'touchstart'].forEach(event =>
-    window.addEventListener(event, resetIdleTimer)
-);
+// Глобальные переменные
+const modelCache = {};
+let hideObjects = [];
 
-resetIdleTimer(); // стартуем при загрузке
-
-// Обновление статуса
+// Спиннер и статус
 const spinner = document.getElementById('loading-spinner');
-const progressTop = document.getElementById('progress-bar-top');
 
 function updateStatus(text, progress = 0, isError = false) {
-    progressTop.style.width = `${progress}%`;
+    progressTop.style.width = progress + '%';
     statusEl.style.opacity = '1';
     statusEl.style.display = 'block';
     messageEl.textContent = text;
 
-    if (progress > 0 && progress < 100) {
-        spinner.style.display = 'block';
-    }
+    spinner.style.display = progress > 0 && progress < 100 ? 'block' : 'none';
 
-    if (isError) {
-        statusEl.classList.add('error');
-        spinner.style.display = 'none';
-    } else {
-        statusEl.classList.remove('error');
-        if (progress >= 100) {
-            setTimeout(() => {
-                statusEl.style.opacity = '0';
-                spinner.style.display = 'none';
-                progressTop.style.width = '0%';
-                setTimeout(() => statusEl.style.display = 'none', 500);
-            }, 500);
-        }
+    if (isError) statusEl.classList.add('error');
+    else statusEl.classList.remove('error');
+
+    if (progress >= 100) {
+        setTimeout(() => {
+            statusEl.style.opacity = '0';
+            progressTop.style.width = '0%';
+            setTimeout(() => statusEl.style.display = 'none', 500);
+        }, 500);
     }
 }
-
 
 // Загрузка модели
 function loadModel(modelPath) {
@@ -129,21 +100,11 @@ function loadModel(modelPath) {
     statusEl.style.display = 'block';
     statusEl.classList.remove('error');
 
-    // Если модель уже загружена — использовать из кэша
     if (modelCache[modelPath]) {
         updateStatus('Загрузка из кэша...', 90);
-
-        // Очистить сцену
-        while (scene.children.length > 1) {
-            scene.remove(scene.children[1]);
-        }
-
-        const cachedScene = modelCache[modelPath].clone(true);
-        scene.add(cachedScene);
-
-        // Центровка, позиционирование и интерфейс, как обычно:
-        setupCameraAndInfo(modelPath, cachedScene);
-
+        clearScene();
+        scene.add(modelCache[modelPath].clone(true));
+        setupCameraAndInfo(modelPath, scene.children[scene.children.length - 1]);
         updateStatus('Готово', 100);
         closeButton.style.display = 'block';
         return;
@@ -153,153 +114,167 @@ function loadModel(modelPath) {
 
     loader.load(
         modelPath,
-        (gltf) => {
+        gltf => {
             updateStatus('Обработка модели...', 90);
-
-            while (scene.children.length > 1) {
-                scene.remove(scene.children[1]);
-            }
-
-            const originalScene = gltf.scene;
-            modelCache[modelPath] = originalScene.clone(true); // сохранить копию
-
-            scene.add(originalScene);
-
-            setupCameraAndInfo(modelPath, originalScene);
-
+            clearScene();
+            const model = gltf.scene;
+            modelCache[modelPath] = model.clone(true);
+            scene.add(model);
+            setupCameraAndInfo(modelPath, model);
             updateStatus('Готово', 100);
             closeButton.style.display = 'block';
         },
-        /*(xhr) => {
-            const percent = xhr.total ? (xhr.loaded / xhr.total) * 100 : 0;
+        xhr => {
             const loadedMB = (xhr.loaded / 1024 / 1024).toFixed(1);
-            const progress = 10 + percent * 0.7;
-            updateStatus(`Загружается: ${loadedMB} MB (${Math.round(progress)}%)`, progress);
-        },*/
-        (xhr) => {
-            const loadedMB = (xhr.loaded / 1024 / 1024).toFixed(1);
-
-            if (xhr.lengthComputable && xhr.total > 0) {
-                const totalMB = (xhr.total / 1024 / 1024).toFixed(1);
-                const percent = (xhr.loaded / xhr.total) * 100;
-                const progress = 10 + percent * 0.8; // от 10% до 90%
-                updateStatus(`Загружается: ${loadedMB} MB / ${totalMB} MB (${Math.round(progress)}%)`, progress);
-            } else {
-                const fakeProgress = Math.min(10 + xhr.loaded * 0.00005, 90); // если размер неизвестен
-                updateStatus(`Загрузка... (${loadedMB} MB)`, fakeProgress);
-            }
+            const progress = xhr.lengthComputable 
+                ? 10 + (xhr.loaded / xhr.total) * 90 
+                : Math.min(10 + xhr.loaded * 0.00005, 90);
+            updateStatus(`Загружается: ${loadedMB} MB`, progress);
         },
-        (error) => {
+        error => {
             console.error('Ошибка загрузки:', error);
             updateStatus('Ошибка загрузки модели.', 0, true);
         }
     );
 }
 
+function clearScene() {
+    for (let i = scene.children.length - 1; i >= 0; i--) {
+        const child = scene.children[i];
+        if (child.type !== 'AmbientLight') scene.remove(child);
+    }
+}
 
+async function setupCameraAndInfo(modelPath, sceneObject) {
+    hideObjects = [];
 
-
-
-function setupCameraAndInfo(modelPath, sceneObject) {
-    // Центрирование и настройка камеры
     const box = new THREE.Box3().setFromObject(sceneObject);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3()).length();
     const distance = size * 1.2;
 
-    const cameraPosition = {
-        'models/Studio_Baked.glb': { hor: 15, vert: 30 },
-        'models/Bedroom_Baked.glb': { hor: 40, vert: 30 }
-    };
+    // Динамически подгружаем конфиг модели
+    let config;
+    try {
+        if (modelPath.includes('Studio_Baked')) {
+            config = (await import('./models/Studio_Baked.config.js')).default;
+        } else if (modelPath.includes('Bedroom_Baked')) {
+            config = (await import('./models/Bedroom_Baked.config.js')).default;
+        } else {
+            console.warn('Конфиг для модели не найден:', modelPath);
+            return;
+        }
+    } catch (e) {
+        console.error('Ошибка загрузки конфига:', e);
+        return;
+    }
 
-    const CameraPos = cameraPosition[modelPath] || { hor: 0, vert: 0 };
-    camera.position.copy(center.clone().add(new THREE.Vector3(CameraPos.hor, CameraPos.vert, distance)));
+    // Камера
+    camera.position.copy(center.clone().add(new THREE.Vector3(config.camera.hor, config.camera.vert, distance)));
     controls.target.copy(center);
     controls.update();
 
-    const cameraLimits = {
-        'models/Studio_Baked.glb': { min: 5, max: 8 },
-        'models/Bedroom_Baked.glb': { min: 7, max: 11 }
-    };
+    controls.minDistance = config.limits.min;
+    controls.maxDistance = config.limits.max;
 
-    const limits = cameraLimits[modelPath] || { min: 1, max: 20 };
-    controls.minDistance = limits.min;
-    controls.maxDistance = limits.max;
+    // Скрываемые объекты
+    sceneObject.traverse(child => {
+        if (child.isMesh && child.material?.envMapIntensity !== undefined) {
+            child.material.envMapIntensity = 0.75;
+            child.material.needsUpdate = true;
+        }
 
-    // Материалы
-    sceneObject.traverse((child) => {
-        if (child.isMesh && child.material) {
-            if (child.material.envMapIntensity !== undefined) {
-                child.material.envMapIntensity = 0.75; // Интенсивность HDRI
-                child.material.needsUpdate = true;
+        if (child.isMesh || child.isGroup) {
+            for (const cfg of config.hideObjects) {
+                if (child.name === cfg.name) {
+                    hideObjects.push({ obj: child, config: cfg });
+                    //console.log(`Объект ${cfg.name} найден — включено скрытие`);
+                }
             }
         }
     });
 
-    // Инфо
-    const manualInfoHTML = {
-        'models/Studio_Baked.glb': 
-            `<div class="detail-item">
-                <strong>Optimized for AR</strong><br>
-                Polys: 4.9m → 378k<br>
-                Size: 1.42gb(Max+Textures) → 28mb<br>
-                Used 1k textures
-            </div>`,
-        'models/Bedroom_Baked.glb': 
-            `<div class="detail-item">
-                <strong>Optimized for AR</strong><br>
-                Polys: 14.2m → 826k<br>
-                Size: 3.44gb(Max+Textures) → 33mb<br>
-                Used 1k textures
-            </div>`
-    };
-
-    const detailsHTML = manualInfoHTML[modelPath] || 
-        `<div class="detail-item">
-            <strong>Info missing</strong><br>
-            Add this model to manualInfoHTML
-        </div>`;
-
-    modelInfo.innerHTML = detailsHTML;
+    // Информация о модели
+    modelInfo.innerHTML = config.infoHTML || 
+        `<div class="detail-item"><strong>Info missing</strong><br>Add info to ${modelPath}.config.js</div>`;
     modelInfo.style.display = 'block';
 }
 
-
-// Обработчики выбора модели
+// Выбор модели
 document.querySelectorAll('.model-option').forEach(option => {
     option.addEventListener('click', () => {
-        const modelPath = option.getAttribute('data-model');
-        loadModel(modelPath);
+        loadModel(option.getAttribute('data-model'));
     });
 });
 
 // Закрытие модели
 closeButton.addEventListener('click', () => {
-    // Очистить сцену (оставляем только ambient light)
-    while (scene.children.length > 1) {
-        scene.remove(scene.children[1]);
-    }
+    clearScene();
     modelInfo.style.display = 'none';
     closeButton.style.display = 'none';
     startScreen.style.display = 'flex';
-
-    // Сброс камеры к начальному положению
     camera.position.set(0, 0, 5);
     controls.target.set(0, 0, 0);
     controls.update();
+    hideObjects = [];
+});
+
+// Resize
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
 // Анимация
 function animate() {
     requestAnimationFrame(animate);
     controls.update();
+
+    if (hideObjects.length > 0) {
+        hideObjects.forEach(({ obj, config }) => {
+            if (!obj) return;
+
+            const objectPos = new THREE.Vector3();
+            obj.getWorldPosition(objectPos);
+
+            const toCameraHorizontal = new THREE.Vector3(
+                camera.position.x - objectPos.x,
+                0,
+                camera.position.z - objectPos.z
+            );
+
+            if (toCameraHorizontal.lengthSq() < 0.01) {
+                obj.traverse(o => { if (o.isMesh) o.visible = true; });
+                return;
+            }
+
+            toCameraHorizontal.normalize();
+
+            const forwardHorizontal = new THREE.Vector3();
+            if (config.direction) {
+                forwardHorizontal.copy(config.direction).normalize();
+            } else {
+                obj.getWorldDirection(forwardHorizontal);
+                forwardHorizontal.y = 0;
+                forwardHorizontal.normalize();
+            }
+
+            const dotHorizontal = toCameraHorizontal.dot(forwardHorizontal);
+
+            let shouldBeVisible = dotHorizontal >= (config.threshold || 0);
+            if (config.invert) shouldBeVisible = !shouldBeVisible;
+
+            obj.traverse(o => {
+                if (o.isMesh) o.visible = shouldBeVisible;
+            });
+
+            // Отладка
+            // console.log(`${config.name}: dot = ${dotHorizontal.toFixed(3)} | visible = ${shouldBeVisible}`);
+        });
+    }
+
     renderer.render(scene, camera);
 }
-animate();
 
-// Подгонка размера окна
-window.addEventListener('resize', () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-});
+animate();
