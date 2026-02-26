@@ -5,6 +5,7 @@ const messageEl = document.getElementById('message');
 const progressTop = document.getElementById('progress-bar-top');
 const closeButton = document.getElementById('close-button');
 const modelInfo = document.getElementById('model-details');
+const modelCache = {}; // Кэш моделей
 const hintPanel = document.getElementById('hint-panel');
 const hintToggle = document.getElementById('hint-toggle');
 
@@ -12,7 +13,7 @@ hintToggle.addEventListener('click', () => {
     hintPanel.style.display = 'none';
 });
 
-// Сцена, камера, рендерер
+// Создание сцены
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
 
@@ -22,7 +23,7 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputEncoding = THREE.sRGBEncoding;
 document.body.appendChild(renderer.domElement);
 
-// Освещение и HDR
+// Освещение
 scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 
 const pmremGenerator = new THREE.PMREMGenerator(renderer);
@@ -30,7 +31,7 @@ pmremGenerator.compileEquirectangularShader();
 
 new THREE.RGBELoader()
     .setPath('hdr/')
-    .load('photo_studio_broadway_hall_1k.hdr', texture => {
+    .load('photo_studio_broadway_hall_1k.hdr', function (texture) {
         const envMap = pmremGenerator.fromEquirectangular(texture).texture;
         scene.environment = envMap;
         scene.background = null;
@@ -38,59 +39,136 @@ new THREE.RGBELoader()
         pmremGenerator.dispose();
     });
 
-// Загрузчик GLTF + Draco
+// Draco-декодер
 const dracoLoader = new THREE.DRACOLoader();
 dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.4.3/');
-const loader = new THREE.GLTFLoader().setDRACOLoader(dracoLoader);
+const loader = new THREE.GLTFLoader();
+loader.setDRACOLoader(dracoLoader);
 
-// OrbitControls
+// Управление камерой
 const controls = new THREE.OrbitControls(camera, renderer.domElement);
-Object.assign(controls, {
-    enablePan: false,
-    enableZoom: true,
-    minDistance: 5,
-    maxDistance: 8,
-    minPolarAngle: Math.PI / 4,
-    maxPolarAngle: Math.PI / 2,
-    enableDamping: true,
-    dampingFactor: 0.05
-});
+controls.enablePan = false;
+controls.enableZoom = true;
+controls.minDistance = 5;
+controls.maxDistance = 8;
+controls.minPolarAngle = Math.PI / 4;
+controls.maxPolarAngle = Math.PI / 2;
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
 
-// Автовращение
+// Автовращение при бездействии
 let idleTimeout = null;
 const idleDelay = 10000;
-const resetIdleTimer = () => {
+
+function resetIdleTimer() {
     clearTimeout(idleTimeout);
     controls.autoRotate = false;
-    idleTimeout = setTimeout(() => controls.autoRotate = true, idleDelay);
-};
-['mousedown', 'keydown', 'wheel', 'touchstart'].forEach(e => window.addEventListener(e, resetIdleTimer));
+    idleTimeout = setTimeout(() => {
+        controls.autoRotate = true;
+    }, idleDelay);
+}
+
+['mousedown', 'keydown', 'wheel', 'touchstart'].forEach(event =>
+    window.addEventListener(event, resetIdleTimer)
+);
 resetIdleTimer();
 
-// Глобальные переменные
-const modelCache = {};
+// Массив конфигов объектов для скрытия
+// STUDIO
+const studioObjects = [
+    { name: 'living_20', threshold: 0.1, invert: false, direction: new THREE.Vector3(0, 0, -1) },
+    { name: 'korobka3_001', threshold: 0, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'living_Mirror', threshold: 0, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'living_Tv_Screen', threshold: 0.1, invert: false, direction: new THREE.Vector3(1, 0, 1) },
+    { name: 'living_Tv_Frame', threshold: 0.1, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'living_17_2', threshold: -0.1, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'korobka_topfacade001', threshold: 0, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'living_10_2', threshold: -0.1, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'korobka3_003', threshold: 0.1, invert: false, direction: new THREE.Vector3(0, 0, -1) },
+    { name: 'korobka3_004', threshold: 0.1, invert: false, direction: new THREE.Vector3(0, 0, -1) },
+    { name: 'bathroom_04_2', threshold: -0.1, invert: false, direction: new THREE.Vector3(0, 0, -1) },
+    { name: 'bathroom_05_2', threshold: -0.1, invert: false, direction: new THREE.Vector3(0, 0, -1) },
+    { name: 'bathroom_Mirror', threshold: 0, invert: false, direction: new THREE.Vector3(0, 0, -1) },
+    { name: 'korobka3_006', threshold: -0.2, invert: false, direction: new THREE.Vector3(1, 0, 0) },
+    { name: 'korobka3_007', threshold: -0.1, invert: false, direction: new THREE.Vector3(1, 0, 0) },
+    { name: 'living_11_2', threshold: -0.1, invert: false, direction: new THREE.Vector3(1, 0, 0) },
+    { name: 'korobka_topfacade_2', threshold: -0.1, invert: false, direction: new THREE.Vector3(1, 0, 0) },
+    { name: 'bathroom_04_1', threshold: -0.1, invert: false, direction: new THREE.Vector3(1, 0, 0) },
+    { name: 'korobka3_008', threshold: -0.1, invert: false, direction: new THREE.Vector3(1, 0, 0) },
+    { name: 'living_18_2', threshold: 0, invert: false, direction: new THREE.Vector3(1, 0, 0) },
+  ];
+
+// BEDROOM
+const bedroomObjects = [
+    { name: 'korobka_000', threshold: 0, invert: false, direction: new THREE.Vector3(-1, 0, 0) },
+    { name: 'living_12_005', threshold: 0, invert: false, direction: new THREE.Vector3(-1, 0, 0) },
+    { name: 'korobka_001', threshold: 0, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'living_09_2', threshold: -0.2, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'korobka_003', threshold: 0, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'korobka_Caps2', threshold: -0.5, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'bathroom2_03_2', threshold: 0, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'bathroom2_Banka_4', threshold: 0, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'bathroom2_banka_7', threshold: 0, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'bathroom2_Banka_8', threshold: 0, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'bathroom2_Banka_3', threshold: 0, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'bathroom2_Banka_2', threshold: 0, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'korobka_004', threshold: 0, invert: false, direction: new THREE.Vector3(1, 0, 0) },
+    { name: 'living_08_2', threshold: 0, invert: false, direction: new THREE.Vector3(1, 0, 0) },
+    { name: 'living_12_3', threshold: -0.3, invert: false, direction: new THREE.Vector3(1, 0, 0) },
+    { name: 'korobka_005', threshold: 0, invert: false, direction: new THREE.Vector3(-1, 0, 0) },
+    { name: 'living_09_3', threshold: -0.2, invert: false, direction: new THREE.Vector3(-1, 0, 0) },
+    { name: 'living_hood', threshold: 0, invert: false, direction: new THREE.Vector3(-1, 0, 0) },
+    { name: 'living_11_2', threshold: -0.25, invert: false, direction: new THREE.Vector3(-1, 0, 0) },
+    { name: 'living_12_004', threshold: -0.25, invert: false, direction: new THREE.Vector3(-1, 0, 0) },
+    { name: 'korobka_006', threshold: 0, invert: false, direction: new THREE.Vector3(1, 0, 0) },
+    { name: 'bathroom2_Banka_5', threshold: 0, invert: false, direction: new THREE.Vector3(1, 0, 0) },
+    { name: 'bathroom2_Banka_6', threshold: 0, invert: false, direction: new THREE.Vector3(1, 0, 0) },
+    { name: 'bathroom2_Window', threshold: 0, invert: false, direction: new THREE.Vector3(1, 0, 0) },
+    { name: 'bathroom2_01_02', threshold: -0.35, invert: false, direction: new THREE.Vector3(1, 0, 0) },
+    { name: 'korobka_007', threshold: 0.05, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'bathroom1_01_003', threshold: -0.2, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'bathroom1_Banka_2', threshold: 0.35, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'bathroom1_WindowFrame', threshold: 0.1, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'korobka_008', threshold: 0, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'living_02_2', threshold: -0.5, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'living_12_2', threshold: 0, invert: false, direction: new THREE.Vector3(0, 0, 1) },
+    { name: 'korobka_009', threshold: 0, invert: false, direction: new THREE.Vector3(1, 0, 0) },
+    { name: 'bedroom_02_2', threshold: -0.3, invert: false, direction: new THREE.Vector3(1, 0, 0) },
+    { name: 'bathroom1_02_2', threshold: -0.1, invert: false, direction: new THREE.Vector3(1, 0, 0) },
+    { name: 'bathroom1_01_2', threshold: -0.1, invert: false, direction: new THREE.Vector3(1, 0, 0) },
+    { name: 'bathroom1_Mirror', threshold: 0, invert: false, direction: new THREE.Vector3(1, 0, 0) }
+  ];
+
+// Переменные для объектов
 let hideObjects = [];
 
-// Спиннер и статус
+// Спиннер и прогресс
 const spinner = document.getElementById('loading-spinner');
 
+// Обновление статуса
 function updateStatus(text, progress = 0, isError = false) {
     progressTop.style.width = progress + '%';
     statusEl.style.opacity = '1';
     statusEl.style.display = 'block';
     messageEl.textContent = text;
 
-    spinner.style.display = progress > 0 && progress < 100 ? 'block' : 'none';
+    if (progress > 0 && progress < 100) {
+        spinner.style.display = 'block';
+    } else {
+        spinner.style.display = 'none';
+    }
 
-    if (isError) statusEl.classList.add('error');
-    else statusEl.classList.remove('error');
-
-    if (progress >= 100) {
-        setTimeout(() => {
-            statusEl.style.opacity = '0';
-            progressTop.style.width = '0%';
-            setTimeout(() => statusEl.style.display = 'none', 500);
-        }, 500);
+    if (isError) {
+        statusEl.classList.add('error');
+    } else {
+        statusEl.classList.remove('error');
+        if (progress >= 100) {
+            setTimeout(() => {
+                statusEl.style.opacity = '0';
+                progressTop.style.width = '0%';
+                setTimeout(() => statusEl.style.display = 'none', 500);
+            }, 500);
+        }
     }
 }
 
@@ -103,13 +181,9 @@ function loadModel(modelPath) {
     if (modelCache[modelPath]) {
         updateStatus('Загрузка из кэша...', 90);
         clearScene();
-
-        const cachedModel = modelCache[modelPath].clone(true);
-        // Сначала камера (модель ещё НЕ в сцене)
-        setupCameraAndInfo(modelPath, cachedModel);
-        // Только потом добавляем
-        scene.add(cachedModel);
-
+        const cachedScene = modelCache[modelPath].clone(true);
+        scene.add(cachedScene);
+        setupCameraAndInfo(modelPath, cachedScene);
         updateStatus('Готово', 100);
         closeButton.style.display = 'block';
         return;
@@ -119,30 +193,15 @@ function loadModel(modelPath) {
 
     loader.load(
         modelPath,
-        async (gltf) => {  // ← async здесь обязательно!
-            try {
-                updateStatus('Обработка модели...', 90);
-                clearScene();
-
-                const model = gltf.scene;
-
-                // КРИТИЧНО: сначала камера и позиционирование (модель ещё НЕ в сцене)
-                await setupCameraAndInfo(modelPath, model);
-
-                // Только после настройки кэшируем и добавляем в сцену
-                modelCache[modelPath] = model.clone(true);
-                scene.add(model);
-
-                // Принудительная перерисовка после добавления
-                controls.update();
-                renderer.render(scene, camera);
-
-                updateStatus('Готово', 100);
-                closeButton.style.display = 'block';
-            } catch (err) {
-                console.error('Ошибка в обработке модели:', err);
-                updateStatus('Ошибка обработки модели: ' + (err.message || 'неизвестная ошибка'), 0, true);
-            }
+        (gltf) => {
+            updateStatus('Обработка модели...', 90);
+            clearScene();
+            const originalScene = gltf.scene;
+            modelCache[modelPath] = originalScene.clone(true);
+            scene.add(originalScene);
+            setupCameraAndInfo(modelPath, originalScene);
+            updateStatus('Готово', 100);
+            closeButton.style.display = 'block';
         },
         (xhr) => {
             const loadedMB = (xhr.loaded / 1024 / 1024).toFixed(1);
@@ -164,13 +223,12 @@ function loadModel(modelPath) {
 }
 
 function clearScene() {
-    for (let i = scene.children.length - 1; i >= 0; i--) {
-        const child = scene.children[i];
-        if (child.type !== 'AmbientLight') scene.remove(child);
+    while (scene.children.length > 1) {
+        scene.remove(scene.children[1]);
     }
 }
 
-async function setupCameraAndInfo(modelPath, sceneObject) {
+function setupCameraAndInfo(modelPath, sceneObject) {
     hideObjects = [];
 
     const box = new THREE.Box3().setFromObject(sceneObject);
@@ -178,57 +236,77 @@ async function setupCameraAndInfo(modelPath, sceneObject) {
     const size = box.getSize(new THREE.Vector3()).length();
     const distance = size * 1.2;
 
-    // Динамически подгружаем конфиг модели
-    let config;
-    try {
-        if (modelPath.includes('Studio_Baked')) {
-            config = (await import('./models/Studio_Baked.config.js')).default;
-        } else if (modelPath.includes('Bedroom_Baked')) {
-            config = (await import('./models/Bedroom_Baked.config.js')).default;
-        } else {
-            console.warn('Конфиг для модели не найден:', modelPath);
-            return;
-        }
-    } catch (e) {
-        console.error('Ошибка загрузки конфига:', e);
-        return;
-    }
+    const cameraPosition = {
+        'models/Studio_Baked.glb': { hor: 15, vert: 30 },
+        'models/Bedroom_Baked.glb': { hor: 40, vert: 30 }
+    };
+    const CameraPos = cameraPosition[modelPath] || { hor: 0, vert: 0 };
 
-    // Камера
-    camera.position.copy(center.clone().add(new THREE.Vector3(config.camera.hor, config.camera.vert, distance)));
+    camera.position.copy(center.clone().add(new THREE.Vector3(CameraPos.hor, CameraPos.vert, distance)));
     controls.target.copy(center);
     controls.update();
 
-    controls.minDistance = config.limits.min;
-    controls.maxDistance = config.limits.max;
+    const cameraLimits = {
+        'models/Studio_Baked.glb': { min: 5, max: 8 },
+        'models/Bedroom_Baked.glb': { min: 7, max: 11 }
+    };
+    const limits = cameraLimits[modelPath] || { min: 1, max: 20 };
+    controls.minDistance = limits.min;
+    controls.maxDistance = limits.max;
 
-    // Скрываемые объекты
-    sceneObject.traverse(child => {
-        if (child.isMesh && child.material?.envMapIntensity !== undefined) {
+    // Выбираем правильный конфиг в зависимости от модели
+    let currentConfig = [];
+    if (modelPath.includes('Studio_Baked.glb')) {
+        currentConfig = studioObjects;
+    } else if (modelPath.includes('Bedroom_Baked.glb')) {
+        currentConfig = bedroomObjects;
+    } else {
+        console.warn('Неизвестная модель, скрытие объектов отключено');
+    }
+
+    sceneObject.traverse((child) => {
+        if (child.isMesh && child.material && child.material.envMapIntensity !== undefined) {
             child.material.envMapIntensity = 0.75;
             child.material.needsUpdate = true;
         }
 
         if (child.isMesh || child.isGroup) {
-            for (const cfg of config.hideObjects) {
-                if (child.name === cfg.name) {
-                    hideObjects.push({ obj: child, config: cfg });
-                    //console.log(`Объект ${cfg.name} найден — включено скрытие`);
+            for (const config of currentConfig) {
+                if (child.name === config.name) {
+                    hideObjects.push({ obj: child, config });
+                    console.log(`Объект ${config.name} найден — включено скрытие`);
                 }
             }
         }
     });
 
-    // Информация о модели
-    modelInfo.innerHTML = config.infoHTML || 
-        `<div class="detail-item"><strong>Info missing</strong><br>Add info to ${modelPath}.config.js</div>`;
+    const manualInfoHTML = {
+        'models/Studio_Baked.glb': `
+            <div class="detail-item">
+                <strong>Optimized for AR</strong><br>
+                Polys: 4.9m → 378k<br>
+                Size: 1.42gb(Max+Textures) → 29mb<br>
+                Used 1k textures
+            </div>`,
+        'models/Bedroom_Baked.glb': `
+            <div class="detail-item">
+                <strong>Optimized for AR</strong><br>
+                Polys: 14.2m → 826k<br>
+                Size: 3.44gb(Max+Textures) → 38mb<br>
+                Used 1k textures
+            </div>`
+    };
+    const detailsHTML = manualInfoHTML[modelPath] || 
+        `<div class="detail-item"><strong>Info missing</strong><br>Add this model to manualInfoHTML</div>`;
+    modelInfo.innerHTML = detailsHTML;
     modelInfo.style.display = 'block';
 }
 
-// Выбор модели
+// Обработчики выбора модели
 document.querySelectorAll('.model-option').forEach(option => {
     option.addEventListener('click', () => {
-        loadModel(option.getAttribute('data-model'));
+        const modelPath = option.getAttribute('data-model');
+        loadModel(modelPath);
     });
 });
 
@@ -244,7 +322,7 @@ closeButton.addEventListener('click', () => {
     hideObjects = [];
 });
 
-// Resize
+// Подгонка размера окна
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
@@ -256,6 +334,7 @@ function animate() {
     requestAnimationFrame(animate);
     controls.update();
 
+    // Скрытие всех объектов при виде сзади
     if (hideObjects.length > 0) {
         hideObjects.forEach(({ obj, config }) => {
             if (!obj) return;
@@ -290,12 +369,14 @@ function animate() {
             let shouldBeVisible = dotHorizontal >= (config.threshold || 0);
             if (config.invert) shouldBeVisible = !shouldBeVisible;
 
-            obj.traverse(o => {
-                if (o.isMesh) o.visible = shouldBeVisible;
+            obj.traverse((o) => {
+                if (o.isMesh) {
+                    o.visible = shouldBeVisible;
+                }
             });
 
-            // Отладка
-            // console.log(`${config.name}: dot = ${dotHorizontal.toFixed(3)} | visible = ${shouldBeVisible}`);
+            // Отладка — оставь включённой для проверки
+            console.log(`${config.name}: dot = ${dotHorizontal.toFixed(3)} | visible = ${shouldBeVisible}`);
         });
     }
 
