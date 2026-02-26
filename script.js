@@ -292,7 +292,7 @@ function setupCameraAndInfo(modelPath, sceneObject) {
             <div class="detail-item">
                 <strong>Optimized for AR</strong><br>
                 Polys: 14.2m → 826k<br>
-                Size: 3.44gb(Max+Textures) → 38mb<br>
+                Size: 3.44gb(Max+Textures) → 34mb<br>
                 Used 1k textures
             </div>`
     };
