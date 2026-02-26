@@ -103,8 +103,13 @@ function loadModel(modelPath) {
     if (modelCache[modelPath]) {
         updateStatus('Загрузка из кэша...', 90);
         clearScene();
-        scene.add(modelCache[modelPath].clone(true));
-        setupCameraAndInfo(modelPath, scene.children[scene.children.length - 1]);
+
+        const cachedModel = modelCache[modelPath].clone(true);
+        // Сначала камера (модель ещё НЕ в сцене)
+        setupCameraAndInfo(modelPath, cachedModel);
+        // Только потом добавляем
+        scene.add(cachedModel);
+
         updateStatus('Готово', 100);
         closeButton.style.display = 'block';
         return;
@@ -114,24 +119,44 @@ function loadModel(modelPath) {
 
     loader.load(
         modelPath,
-        gltf => {
-            updateStatus('Обработка модели...', 90);
-            clearScene();
-            const model = gltf.scene;
-            modelCache[modelPath] = model.clone(true);
-            scene.add(model);
-            setupCameraAndInfo(modelPath, model);
-            updateStatus('Готово', 100);
-            closeButton.style.display = 'block';
+        async (gltf) => {  // ← async здесь обязательно!
+            try {
+                updateStatus('Обработка модели...', 90);
+                clearScene();
+
+                const model = gltf.scene;
+
+                // КРИТИЧНО: сначала камера и позиционирование (модель ещё НЕ в сцене)
+                await setupCameraAndInfo(modelPath, model);
+
+                // Только после настройки кэшируем и добавляем в сцену
+                modelCache[modelPath] = model.clone(true);
+                scene.add(model);
+
+                // Принудительная перерисовка после добавления
+                controls.update();
+                renderer.render(scene, camera);
+
+                updateStatus('Готово', 100);
+                closeButton.style.display = 'block';
+            } catch (err) {
+                console.error('Ошибка в обработке модели:', err);
+                updateStatus('Ошибка обработки модели: ' + (err.message || 'неизвестная ошибка'), 0, true);
+            }
         },
-        xhr => {
+        (xhr) => {
             const loadedMB = (xhr.loaded / 1024 / 1024).toFixed(1);
-            const progress = xhr.lengthComputable 
-                ? 10 + (xhr.loaded / xhr.total) * 90 
-                : Math.min(10 + xhr.loaded * 0.00005, 90);
-            updateStatus(`Загружается: ${loadedMB} MB`, progress);
+            if (xhr.lengthComputable && xhr.total > 0) {
+                const totalMB = (xhr.total / 1024 / 1024).toFixed(1);
+                const percent = (xhr.loaded / xhr.total) * 100;
+                const progress = 10 + percent * 0.8;
+                updateStatus(`Загружается: ${loadedMB} MB / ${totalMB} MB (${Math.round(progress)}%)`, progress);
+            } else {
+                const fakeProgress = Math.min(10 + xhr.loaded * 0.00005, 90);
+                updateStatus(`Загрузка... (${loadedMB} MB)`, fakeProgress);
+            }
         },
-        error => {
+        (error) => {
             console.error('Ошибка загрузки:', error);
             updateStatus('Ошибка загрузки модели.', 0, true);
         }
